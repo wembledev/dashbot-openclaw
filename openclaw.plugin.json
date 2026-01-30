@@ -1,0 +1,14 @@
+{
+  "id": "dashbot",
+  "name": "DashBot",
+  "version": "0.1.0",
+  "description": "DashBot dashboard channel plugin — connects OpenClaw to DashBot via WebSocket",
+  "channels": [
+    "dashbot"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
