@@ -173,7 +173,31 @@ The plugin provides real-time agent status data to DashBot's `/status` page. No 
 |------|--------|
 | Sessions | `~/.openclaw/agents/main/sessions/sessions.json` |
 | Cron jobs | `~/.openclaw/cron/jobs.json` |
-| Memory stats | `~/.openclaw/memory/main.sqlite` |
+| Memory stats | QMD or `~/.openclaw/memory/main.sqlite` (see below) |
+
+### Memory backend
+
+The status page memory widget supports two backends:
+
+| Backend | Description |
+|---------|-------------|
+| **qmd** | [QMD](https://github.com/tobi/qmd) — local BM25 + vector + LLM re-ranking search engine |
+| **openclaw** | OpenClaw's built-in SQLite memory index (Gemini embeddings) |
+
+Set `DASHBOT_MEMORY_BACKEND` to choose:
+
+```sh
+# Force qmd
+export DASHBOT_MEMORY_BACKEND=qmd
+
+# Force openclaw
+export DASHBOT_MEMORY_BACKEND=openclaw
+
+# Auto-detect (default): tries qmd first, falls back to openclaw
+# unset DASHBOT_MEMORY_BACKEND
+```
+
+**Auto-detect (default):** If `qmd` is installed and has an index, it's used automatically. Otherwise falls back to OpenClaw's SQLite. No configuration needed if you have qmd installed.
 
 ## How it works (chat)
 
