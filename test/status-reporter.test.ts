@@ -189,9 +189,6 @@ describe("gatherStatusData", () => {
 describe("StatusReporter", () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
-    )
   })
 
   afterEach(() => {
@@ -199,74 +196,86 @@ describe("StatusReporter", () => {
     vi.restoreAllMocks()
   })
 
-  it("starts reporting immediately and on interval", async () => {
+  it("calls sendCallback immediately and on interval", async () => {
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
-    const reporter = new StatusReporter(
-      { url: "https://dashbot.example.com", token: "test-token" },
-      log,
-      30000,
-    )
+    const reporter = new StatusReporter(log, 15000)
+    const sendCallback = vi.fn()
 
-    reporter.start()
+    reporter.start(sendCallback)
 
-    // Wait for the immediate report
+    // Immediate report
     await vi.advanceTimersByTimeAsync(10)
+    expect(sendCallback).toHaveBeenCalledTimes(1)
 
-    expect(fetch).toHaveBeenCalledTimes(1)
-    expect(fetch).toHaveBeenCalledWith(
-      "https://dashbot.example.com/api/status/update",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          "Authorization": "Bearer test-token",
-          "Content-Type": "application/json",
-        }),
-      }),
-    )
+    const data = sendCallback.mock.calls[0][0]
+    expect(data.agent_status).toBeDefined()
+    expect(data.token_burn).toBeDefined()
+    expect(data.sessions).toBeDefined()
 
-    // Advance 30 seconds for next tick
-    await vi.advanceTimersByTimeAsync(30000)
-    expect(fetch).toHaveBeenCalledTimes(2)
+    // Advance to next interval
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(sendCallback).toHaveBeenCalledTimes(2)
 
     reporter.stop()
   })
 
-  it("stops reporting on stop()", async () => {
+  it("stops calling sendCallback on stop()", async () => {
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
-    const reporter = new StatusReporter(
-      { url: "https://dashbot.example.com", token: "test-token" },
-      log,
-      30000,
-    )
+    const reporter = new StatusReporter(log, 15000)
+    const sendCallback = vi.fn()
 
-    reporter.start()
+    reporter.start(sendCallback)
     await vi.advanceTimersByTimeAsync(10)
 
     reporter.stop()
 
-    const callsBefore = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    const callsBefore = sendCallback.mock.calls.length
     await vi.advanceTimersByTimeAsync(60000)
-    expect(fetch).toHaveBeenCalledTimes(callsBefore)
+    expect(sendCallback).toHaveBeenCalledTimes(callsBefore)
   })
 
-  it("logs warning on POST failure", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("Internal Error", { status: 500 }),
-    )
-
+  it("tracks active state correctly", () => {
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
-    const reporter = new StatusReporter(
-      { url: "https://dashbot.example.com", token: "test-token" },
-      log,
-      30000,
-    )
+    const reporter = new StatusReporter(log, 15000)
 
-    reporter.start()
-    await vi.advanceTimersByTimeAsync(10)
+    expect(reporter.isActive()).toBe(false)
+
+    reporter.start(vi.fn())
+    expect(reporter.isActive()).toBe(true)
+
+    reporter.stop()
+    expect(reporter.isActive()).toBe(false)
+  })
+
+  it("does not start twice", () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    const reporter = new StatusReporter(log, 15000)
+
+    reporter.start(vi.fn())
+    reporter.start(vi.fn())
 
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("POST failed: 500"),
+      expect.stringContaining("Already active"),
     )
+
+    reporter.stop()
+  })
+
+  it("logs errors from gatherStatusData gracefully", async () => {
+    // Force gatherStatusData to throw by mocking fs to throw
+    const { readFileSync } = await import("node:fs")
+    vi.mocked(readFileSync).mockImplementation(() => { throw new Error("disk error") })
+
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    const reporter = new StatusReporter(log, 15000)
+    const sendCallback = vi.fn()
+
+    reporter.start(sendCallback)
+    await vi.advanceTimersByTimeAsync(10)
+
+    // Should still call callback (with empty/default data since sessions/cron fail gracefully)
+    // The gatherStatusData catches errors internally, so it should still work
+    expect(sendCallback).toHaveBeenCalled()
 
     reporter.stop()
   })

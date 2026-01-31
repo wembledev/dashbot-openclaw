@@ -359,19 +359,16 @@ export function gatherStatusData(): StatusData {
 export class StatusReporter {
   private log: Logger
   private timer: ReturnType<typeof setInterval> | null = null
-  private httpTimer: ReturnType<typeof setInterval> | null = null
   private intervalMs: number
   private sendCallback: ((data: StatusData) => void) | null = null
   private active = false
-  private httpUrl: string | null = null
-  private httpToken: string | null = null
 
   constructor(log: Logger, intervalMs = 15000) {
     this.log = log
     this.intervalMs = intervalMs
   }
 
-  /** Start on-demand WebSocket reporting (when viewers are active) */
+  /** Start on-demand reporting (when status page viewers are active) */
   start(sendCallback: (data: StatusData) => void): void {
     if (this.active) {
       this.log.warn?.("[status-reporter] Already active")
@@ -396,23 +393,6 @@ export class StatusReporter {
     this.log.info?.("[status-reporter] Stopped")
   }
 
-  /** Start background HTTP POST fallback (always runs, slower interval) */
-  startHttpFallback(url: string, token: string): void {
-    this.httpUrl = url.replace(/\/$/, "")
-    this.httpToken = token
-    this.log.info?.("[status-reporter] Starting HTTP fallback (every 30s)")
-    
-    void this.postStatus()
-    this.httpTimer = setInterval(() => void this.postStatus(), 30000)
-  }
-
-  stopHttpFallback(): void {
-    if (this.httpTimer) {
-      clearInterval(this.httpTimer)
-      this.httpTimer = null
-    }
-  }
-
   isActive(): boolean {
     return this.active
   }
@@ -425,27 +405,6 @@ export class StatusReporter {
       this.sendCallback(data)
     } catch (err) {
       this.log.error?.(`[status-reporter] Failed to gather/send status: ${String(err)}`)
-    }
-  }
-
-  private async postStatus(): Promise<void> {
-    if (!this.httpUrl || !this.httpToken) return
-
-    try {
-      const data = gatherStatusData()
-      const res = await fetch(`${this.httpUrl}/api/status/update`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.httpToken}`,
-        },
-        body: JSON.stringify(data),
-      })
-      if (!res.ok) {
-        this.log.warn?.(`[status-reporter] HTTP fallback POST failed: ${res.status}`)
-      }
-    } catch (err) {
-      this.log.warn?.(`[status-reporter] HTTP fallback error: ${String(err)}`)
     }
   }
 }

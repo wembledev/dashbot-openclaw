@@ -2,12 +2,13 @@ import { dashbotPlugin } from "../src/channel.js"
 import type { GatewayContext, DashbotAccount } from "../src/channel.js"
 import type { CableMessage } from "../src/types.js"
 
-// Mock status reporter
+// Mock status reporter with a real class (must be constructible with `new`)
 vi.mock("../src/status-reporter.js", () => ({
-  StatusReporter: vi.fn().mockImplementation(() => ({
-    start: vi.fn(),
-    stop: vi.fn(),
-  })),
+  StatusReporter: class MockStatusReporter {
+    start = vi.fn()
+    stop = vi.fn()
+    isActive = vi.fn(() => false)
+  },
 }))
 
 // Mock runtime module
@@ -61,7 +62,7 @@ function simulateMessage(ws: MockWebSocket, data: unknown) {
 
 describe("dashbotPlugin", () => {
   beforeEach(() => {
-    vi.restoreAllMocks()
+    vi.clearAllMocks()
     vi.useFakeTimers()
     createdSockets.length = 0
   })

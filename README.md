@@ -155,21 +155,42 @@ flowchart LR
 - **DashBot side:** set `DASHBOT_API_TOKEN` in `.env` and restart Rails
 - **Plugin side:** `openclaw config set channels.dashbot.token <token>` and restart gateway
 
-## How it works
+## Status page
+
+The plugin provides real-time agent status data to DashBot's `/status` page. No configuration needed — it works automatically over the same WebSocket connection used for chat.
+
+### How it works
+
+1. A viewer opens the DashBot status page → DashBot broadcasts `status_requested` to `plugin_commands` stream
+2. Plugin receives the broadcast → starts `StatusReporter` which reads OpenClaw state files every 15 seconds
+3. Status data (sessions, cron jobs, memory stats, token burn) is sent back via `send_status` action
+4. DashBot relays it to all status page viewers via `StatusChannel`
+5. Last viewer leaves → DashBot broadcasts `status_stopped` → plugin stops reporting
+
+### Data sources
+
+| Data | Source |
+|------|--------|
+| Sessions | `~/.openclaw/agents/main/sessions/sessions.json` |
+| Cron jobs | `~/.openclaw/cron/jobs.json` |
+| Memory stats | `~/.openclaw/memory/main.sqlite` |
+
+## How it works (chat)
 
 ```mermaid
 graph TD
     Entry[index.ts] --> Channel[src/channel.ts<br/>ChannelPlugin]
     Channel --> Conn[src/connection.ts<br/>Action Cable client]
-    Channel --> Out[src/outbound.ts<br/>sendText via WS or HTTP]
+    Channel --> Out[src/outbound.ts<br/>sendText via WS]
+    Channel --> Status[src/status-reporter.ts<br/>Reads OpenClaw state]
     Types[src/types.ts]
     Conn -->|WebSocket| DashBot[DashBot /cable]
-    Out -->|fallback HTTP| API[DashBot /api/messages/respond]
 ```
 
 - **connection.ts** — Raw WebSocket client implementing the Action Cable protocol (subscribe, receive broadcasts, send messages). Auto-reconnects on disconnect.
-- **outbound.ts** — Sends assistant responses over WebSocket, falling back to HTTP POST if the socket isn't connected.
-- **channel.ts** — OpenClaw `ChannelPlugin` that starts the connection, listens for user messages, and dispatches them to the gateway runtime.
+- **outbound.ts** — Sends assistant responses over WebSocket (with HTTP POST fallback if socket disconnected).
+- **channel.ts** — OpenClaw `ChannelPlugin` that starts the connection, handles chat messages and status page commands.
+- **status-reporter.ts** — Reads OpenClaw state files (sessions, cron, memory) and sends periodic updates via WebSocket callback.
 - **types.ts** — TypeScript interfaces for DashBot messages and Action Cable framing.
 
 ### Action Cable protocol
