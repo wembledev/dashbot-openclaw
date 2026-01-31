@@ -14,6 +14,10 @@ export class DashbotConnection {
     this.onMessage = onMessage
   }
 
+  isConnected(): boolean {
+    return this.subscribed && this.ws !== null
+  }
+
   connect(): void {
     const wsUrl = this.buildWsUrl()
     console.log(`[dashbot] Connecting to ${wsUrl}`)
@@ -60,6 +64,20 @@ export class DashbotConnection {
       command: "message",
       identifier: CHANNEL_IDENTIFIER,
       data: JSON.stringify({ action: "respond", content, metadata }),
+    }
+    this.ws.send(JSON.stringify(cmd))
+  }
+
+  sendStatus(statusData: unknown): void {
+    if (!this.ws || !this.subscribed) {
+      console.warn("[dashbot] Cannot send status — not connected/subscribed")
+      return
+    }
+
+    const cmd: CableCommand = {
+      command: "message",
+      identifier: CHANNEL_IDENTIFIER,
+      data: JSON.stringify({ action: "send_status", status_data: statusData }),
     }
     this.ws.send(JSON.stringify(cmd))
   }

@@ -1,0 +1,273 @@
+import { formatTokens, formatAge, formatRelativeTime, gatherStatusData, StatusReporter } from "../src/status-reporter.js"
+
+// Mock node:child_process
+vi.mock("node:child_process", () => ({
+  execSync: vi.fn(() => "4|12|14"),
+}))
+
+// Mock node:fs
+const mockSessionsData = JSON.stringify({
+  "agent:main:main": {
+    sessionId: "abc-123",
+    updatedAt: Date.now() - 120000, // 2 minutes ago
+    model: "claude-opus-4-5",
+    contextTokens: 200000,
+    totalTokens: 166000,
+    systemSent: true,
+  },
+  "agent:main:cron:job-1": {
+    sessionId: "def-456",
+    updatedAt: Date.now() - 3600000, // 1 hour ago
+    model: "claude-haiku-4-5",
+    contextTokens: 200000,
+    totalTokens: 22000,
+  },
+})
+
+const mockCronData = JSON.stringify({
+  version: 1,
+  jobs: [
+    {
+      id: "job-1",
+      name: "Morning briefing",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 7 * * *" },
+      sessionTarget: "isolated",
+      state: {
+        nextRunAtMs: Date.now() + 3600000,
+        lastRunAtMs: Date.now() - 7200000,
+        lastStatus: "ok",
+      },
+    },
+    {
+      id: "job-2",
+      name: "Health check",
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/30 * * * *" },
+      sessionTarget: "main",
+      state: {
+        nextRunAtMs: Date.now() + 900000,
+        lastRunAtMs: Date.now() - 1800000,
+        lastStatus: "skipped",
+      },
+    },
+    {
+      id: "job-3",
+      name: "Disabled job",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 0 * * *" },
+      sessionTarget: "isolated",
+      state: {},
+    },
+  ],
+})
+
+vi.mock("node:fs", () => ({
+  readFileSync: vi.fn((path: string) => {
+    if (path.includes("sessions.json")) return mockSessionsData
+    if (path.includes("jobs.json")) return mockCronData
+    throw new Error("File not found")
+  }),
+  existsSync: vi.fn(() => true),
+}))
+
+describe("formatTokens", () => {
+  it("formats tokens with k suffix", () => {
+    expect(formatTokens(166000, 200000)).toBe("166k/200k")
+  })
+
+  it("formats small token counts without k", () => {
+    expect(formatTokens(500, 1000)).toBe("500/1k")
+  })
+
+  it("handles zero tokens", () => {
+    expect(formatTokens(0, 200000)).toBe("0/200k")
+  })
+})
+
+describe("formatAge", () => {
+  it("formats seconds", () => {
+    expect(formatAge(30000)).toBe("30s ago")
+  })
+
+  it("formats minutes", () => {
+    expect(formatAge(120000)).toBe("2m ago")
+  })
+
+  it("formats hours", () => {
+    expect(formatAge(7200000)).toBe("2h ago")
+  })
+
+  it("formats days", () => {
+    expect(formatAge(172800000)).toBe("2d ago")
+  })
+
+  it("handles zero", () => {
+    expect(formatAge(0)).toBe("0s ago")
+  })
+
+  it("handles negative", () => {
+    expect(formatAge(-1000)).toBe("0s ago")
+  })
+})
+
+describe("formatRelativeTime", () => {
+  const now = Date.now()
+
+  it("formats future time", () => {
+    expect(formatRelativeTime(now + 3600000, now)).toBe("in 1h")
+  })
+
+  it("formats past time", () => {
+    expect(formatRelativeTime(now - 3600000, now)).toBe("1h ago")
+  })
+
+  it("formats near future in seconds", () => {
+    expect(formatRelativeTime(now + 30000, now)).toBe("in 30s")
+  })
+})
+
+describe("gatherStatusData", () => {
+  it("returns complete status data structure", () => {
+    const data = gatherStatusData()
+
+    expect(data.agent_status.running).toBe(true)
+    expect(data.agent_status.session_count).toBe(2)
+    expect(data.agent_status.main_model).toBe("claude-opus-4-5")
+  })
+
+  it("includes main session token data", () => {
+    const data = gatherStatusData()
+
+    expect(data.token_burn.main_tokens).toBe("166k/200k")
+    expect(data.token_burn.main_context_percent).toBe(83)
+    expect(data.token_burn.model).toBe("claude-opus-4-5")
+  })
+
+  it("includes cron jobs (excludes disabled)", () => {
+    const data = gatherStatusData()
+
+    expect(data.tasks.cron_jobs).toHaveLength(2)
+    expect(data.tasks.cron_jobs[0].name).toBe("Morning briefing")
+    expect(data.tasks.cron_jobs[1].name).toBe("Health check")
+  })
+
+  it("includes memory stats from sqlite", () => {
+    const data = gatherStatusData()
+
+    expect(data.memory.file_count).toBe(4)
+    expect(data.memory.chunk_count).toBe(12)
+    expect(data.memory.cache_count).toBe(14)
+    expect(data.memory.vector_ready).toBe(true)
+    expect(data.memory.fts_ready).toBe(true)
+  })
+
+  it("includes session health data", () => {
+    const data = gatherStatusData()
+
+    expect(data.session_health.model).toBe("claude-opus-4-5")
+    expect(data.session_health.context_percent).toBe(83)
+    expect(data.session_health.session_key).toBe("agent:main:main")
+  })
+
+  it("includes sessions list sorted with main first", () => {
+    const data = gatherStatusData()
+
+    expect(data.sessions).toHaveLength(2)
+    expect(data.sessions[0].key).toBe("agent:main:main")
+    expect(data.sessions[1].key).toBe("agent:main:cron:job-1")
+  })
+
+  it("includes fetched_at timestamp", () => {
+    const data = gatherStatusData()
+
+    expect(data.fetched_at).toBeTruthy()
+    expect(typeof data.fetched_at).toBe("string")
+  })
+})
+
+describe("StatusReporter", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    )
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it("starts reporting immediately and on interval", async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    const reporter = new StatusReporter(
+      { url: "https://dashbot.example.com", token: "test-token" },
+      log,
+      30000,
+    )
+
+    reporter.start()
+
+    // Wait for the immediate report
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith(
+      "https://dashbot.example.com/api/status/update",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Authorization": "Bearer test-token",
+          "Content-Type": "application/json",
+        }),
+      }),
+    )
+
+    // Advance 30 seconds for next tick
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    reporter.stop()
+  })
+
+  it("stops reporting on stop()", async () => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    const reporter = new StatusReporter(
+      { url: "https://dashbot.example.com", token: "test-token" },
+      log,
+      30000,
+    )
+
+    reporter.start()
+    await vi.advanceTimersByTimeAsync(10)
+
+    reporter.stop()
+
+    const callsBefore = (fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(fetch).toHaveBeenCalledTimes(callsBefore)
+  })
+
+  it("logs warning on POST failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Internal Error", { status: 500 }),
+    )
+
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+    const reporter = new StatusReporter(
+      { url: "https://dashbot.example.com", token: "test-token" },
+      log,
+      30000,
+    )
+
+    reporter.start()
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("POST failed: 500"),
+    )
+
+    reporter.stop()
+  })
+})

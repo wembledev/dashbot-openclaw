@@ -2,6 +2,14 @@ import { dashbotPlugin } from "../src/channel.js"
 import type { GatewayContext, DashbotAccount } from "../src/channel.js"
 import type { CableMessage } from "../src/types.js"
 
+// Mock status reporter
+vi.mock("../src/status-reporter.js", () => ({
+  StatusReporter: vi.fn().mockImplementation(() => ({
+    start: vi.fn(),
+    stop: vi.fn(),
+  })),
+}))
+
 // Mock runtime module
 vi.mock("../src/runtime.js", () => ({
   getDashbotRuntime: vi.fn(() => ({
@@ -99,6 +107,110 @@ describe("dashbotPlugin", () => {
     it("detects unconfigured account", () => {
       const empty = dashbotPlugin.config.resolveAccount({ channels: {} }, "default")
       expect(dashbotPlugin.config.isConfigured(empty)).toBe(false)
+    })
+  })
+
+  describe("multi-account config", () => {
+    const multiCfg = {
+      channels: {
+        dashbot: {
+          enabled: true,
+          url: "https://dashbot.example.com",
+          token: "prod-token",
+          accounts: {
+            dev: {
+              url: "http://localhost:3000",
+              token: "dev-token",
+            },
+            staging: {
+              url: "https://staging.dashbot.example.com",
+              token: "staging-token",
+              enabled: false,
+            },
+          },
+        },
+      },
+    }
+
+    it("listAccountIds returns default + named accounts", () => {
+      const ids = dashbotPlugin.config.listAccountIds(multiCfg)
+      expect(ids).toContain("default")
+      expect(ids).toContain("dev")
+      expect(ids).toContain("staging")
+      expect(ids).toHaveLength(3)
+    })
+
+    it("listAccountIds returns only default when no accounts block", () => {
+      const cfg = { channels: { dashbot: { url: "https://x.com", token: "t" } } }
+      expect(dashbotPlugin.config.listAccountIds(cfg)).toEqual(["default"])
+    })
+
+    it("resolveAccount returns flat config for default", () => {
+      const account = dashbotPlugin.config.resolveAccount(multiCfg, "default")
+      expect(account.accountId).toBe("default")
+      expect(account.url).toBe("https://dashbot.example.com")
+      expect(account.token).toBe("prod-token")
+      expect(account.enabled).toBe(true)
+      expect(account.name).toBe("DashBot")
+    })
+
+    it("resolveAccount returns named account config", () => {
+      const account = dashbotPlugin.config.resolveAccount(multiCfg, "dev")
+      expect(account.accountId).toBe("dev")
+      expect(account.url).toBe("http://localhost:3000")
+      expect(account.token).toBe("dev-token")
+      expect(account.enabled).toBe(true)
+      expect(account.name).toBe("DashBot (dev)")
+    })
+
+    it("resolveAccount respects disabled flag on named account", () => {
+      const account = dashbotPlugin.config.resolveAccount(multiCfg, "staging")
+      expect(account.accountId).toBe("staging")
+      expect(account.enabled).toBe(false)
+      expect(dashbotPlugin.config.isEnabled(account)).toBe(false)
+    })
+
+    it("resolveAccount returns empty shell for unknown account", () => {
+      const account = dashbotPlugin.config.resolveAccount(multiCfg, "unknown")
+      expect(account.accountId).toBe("unknown")
+      expect(account.url).toBe("")
+      expect(account.token).toBe("")
+      expect(dashbotPlugin.config.isConfigured(account)).toBe(false)
+    })
+
+    it("setAccountEnabled updates default account at top level", () => {
+      const result = dashbotPlugin.config.setAccountEnabled({ cfg: multiCfg, accountId: "default", enabled: false })
+      const dashbot = (result.channels as Record<string, unknown>).dashbot as Record<string, unknown>
+      expect(dashbot.enabled).toBe(false)
+      // Named accounts unchanged
+      const accounts = dashbot.accounts as Record<string, Record<string, unknown>>
+      expect(accounts.dev.url).toBe("http://localhost:3000")
+    })
+
+    it("setAccountEnabled updates named account inside accounts block", () => {
+      const result = dashbotPlugin.config.setAccountEnabled({ cfg: multiCfg, accountId: "dev", enabled: false })
+      const dashbot = (result.channels as Record<string, unknown>).dashbot as Record<string, unknown>
+      const accounts = dashbot.accounts as Record<string, Record<string, unknown>>
+      expect(accounts.dev.enabled).toBe(false)
+      expect(accounts.dev.url).toBe("http://localhost:3000")
+      // Default unchanged
+      expect(dashbot.enabled).toBe(true)
+    })
+
+    it("deleteAccount for default removes entire dashbot block", () => {
+      const result = dashbotPlugin.config.deleteAccount({ cfg: multiCfg, accountId: "default" })
+      const channels = result.channels as Record<string, unknown>
+      expect(channels.dashbot).toBeUndefined()
+    })
+
+    it("deleteAccount for named account preserves others", () => {
+      const result = dashbotPlugin.config.deleteAccount({ cfg: multiCfg, accountId: "dev" })
+      const dashbot = (result.channels as Record<string, unknown>).dashbot as Record<string, unknown>
+      const accounts = dashbot.accounts as Record<string, unknown>
+      expect(accounts.dev).toBeUndefined()
+      expect(accounts.staging).toBeDefined()
+      // Default config preserved
+      expect(dashbot.url).toBe("https://dashbot.example.com")
     })
   })
 

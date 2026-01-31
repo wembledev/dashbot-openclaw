@@ -2,6 +2,7 @@ import type { DashbotConfig, CableMessage } from "./types.js"
 import { DashbotConnection } from "./connection.js"
 import { createOutbound } from "./outbound.js"
 import { getDashbotRuntime } from "./runtime.js"
+import { StatusReporter } from "./status-reporter.js"
 
 const DEFAULT_ACCOUNT_ID = "default"
 
@@ -45,18 +46,27 @@ function getDashbotChannelConfig(cfg: Record<string, unknown>): Record<string, u
   return (channels?.dashbot as Record<string, unknown>) ?? {}
 }
 
-function resolveAccount(cfg: Record<string, unknown>, _accountId: string): DashbotAccount {
+function resolveAccount(cfg: Record<string, unknown>, accountId: string): DashbotAccount {
   const channelCfg = getDashbotChannelConfig(cfg)
+
+  let source: Record<string, unknown>
+  if (accountId !== DEFAULT_ACCOUNT_ID) {
+    const accounts = (channelCfg.accounts ?? {}) as Record<string, unknown>
+    source = (accounts[accountId] ?? {}) as Record<string, unknown>
+  } else {
+    source = channelCfg
+  }
+
   return {
-    accountId: DEFAULT_ACCOUNT_ID,
-    name: "DashBot",
-    enabled: channelCfg.enabled !== false,
-    url: String(channelCfg.url ?? ""),
-    token: String(channelCfg.token ?? ""),
+    accountId,
+    name: accountId === DEFAULT_ACCOUNT_ID ? "DashBot" : `DashBot (${accountId})`,
+    enabled: source.enabled !== false,
+    url: String(source.url ?? ""),
+    token: String(source.token ?? ""),
     config: {
-      url: String(channelCfg.url ?? ""),
-      token: String(channelCfg.token ?? ""),
-      enabled: channelCfg.enabled !== false,
+      url: String(source.url ?? ""),
+      token: String(source.token ?? ""),
+      enabled: source.enabled !== false,
     },
   }
 }
@@ -78,7 +88,11 @@ export const dashbotPlugin = {
   },
 
   config: {
-    listAccountIds: (_cfg: Record<string, unknown>) => [DEFAULT_ACCOUNT_ID],
+    listAccountIds: (cfg: Record<string, unknown>) => {
+      const channelCfg = getDashbotChannelConfig(cfg)
+      const accounts = (channelCfg.accounts ?? {}) as Record<string, unknown>
+      return [DEFAULT_ACCOUNT_ID, ...Object.keys(accounts)]
+    },
     resolveAccount: (cfg: Record<string, unknown>, accountId: string) => resolveAccount(cfg, accountId),
     defaultAccountId: (_cfg: Record<string, unknown>) => DEFAULT_ACCOUNT_ID,
     isConfigured: (account: DashbotAccount) => Boolean(account.url?.trim() && account.token?.trim()),
@@ -89,13 +103,26 @@ export const dashbotPlugin = {
       enabled: account.enabled,
       configured: Boolean(account.url?.trim() && account.token?.trim()),
     }),
-    setAccountEnabled: ({ cfg, enabled }: { cfg: Record<string, unknown>; accountId: string; enabled: boolean }) => {
+    setAccountEnabled: ({ cfg, accountId, enabled }: { cfg: Record<string, unknown>; accountId: string; enabled: boolean }) => {
       const channels = (cfg.channels ?? {}) as Record<string, unknown>
       const dashbot = (channels.dashbot ?? {}) as Record<string, unknown>
+      if (accountId !== DEFAULT_ACCOUNT_ID) {
+        const accounts = (dashbot.accounts ?? {}) as Record<string, unknown>
+        const acct = (accounts[accountId] ?? {}) as Record<string, unknown>
+        return { ...cfg, channels: { ...channels, dashbot: { ...dashbot, accounts: { ...accounts, [accountId]: { ...acct, enabled } } } } }
+      }
       return { ...cfg, channels: { ...channels, dashbot: { ...dashbot, enabled } } }
     },
-    deleteAccount: ({ cfg }: { cfg: Record<string, unknown>; accountId: string }) => {
+    deleteAccount: ({ cfg, accountId }: { cfg: Record<string, unknown>; accountId: string }) => {
       const channels = { ...(cfg.channels as Record<string, unknown>) }
+      if (accountId !== DEFAULT_ACCOUNT_ID) {
+        const dashbot = { ...(channels.dashbot as Record<string, unknown>) }
+        const accounts = { ...(dashbot.accounts as Record<string, unknown>) }
+        delete accounts[accountId]
+        dashbot.accounts = accounts
+        channels.dashbot = dashbot
+        return { ...cfg, channels }
+      }
       delete channels.dashbot
       return { ...cfg, channels }
     },
@@ -182,10 +209,29 @@ export const dashbotPlugin = {
 
       log.info?.(`[${account.accountId}] connecting to ${account.url}`)
 
+      // Create status reporter (will start on-demand when requested)
+      const statusReporter = new StatusReporter(log, 15000)
+
       const connection = new DashbotConnection(dashbotConfig, (data: CableMessage) => {
-        if (data.type === "message" && data.message.role === "user") {
+        // Handle chat messages
+        if (data.type === "message" && data.message?.role === "user") {
           log.info?.(`[${account.accountId}] inbound: ${data.message.content.slice(0, 80)}`)
           dispatchToDashbot({ content: data.message.content, connection, dashbotConfig, cfg, log, accountId: account.accountId })
+        }
+        // Handle plugin commands (status_requested, status_stopped)
+        else if (data.type === "status_requested") {
+          log.info?.(`[${account.accountId}] Status requested - starting periodic status updates`)
+          if (!statusReporter.isActive()) {
+            statusReporter.start((statusData) => {
+              if (connection.isConnected()) {
+                connection.sendStatus(statusData)
+              }
+            })
+          }
+        }
+        else if (data.type === "status_stopped") {
+          log.info?.(`[${account.accountId}] Status stopped - halting periodic updates`)
+          statusReporter.stop()
         }
       })
 
@@ -195,6 +241,7 @@ export const dashbotPlugin = {
       return new Promise<void>((resolve) => {
         abortSignal.addEventListener("abort", () => {
           log.info?.(`[${account.accountId}] disconnecting`)
+          statusReporter.stop()
           connection.disconnect()
           resolve()
         })

@@ -13,7 +13,7 @@ export interface DashbotMessage {
 
 export interface CableMessage {
   type: string
-  message: DashbotMessage
+  message?: DashbotMessage
 }
 
 export interface CableCommand {
