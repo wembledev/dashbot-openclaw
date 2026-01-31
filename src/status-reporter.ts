@@ -32,6 +32,8 @@ export interface CronError {
 }
 
 export interface StatusMemory {
+  backend: "qmd" | "openclaw"
+  // qmd fields
   file_count: number
   vector_count: number
   index_size: string
@@ -42,6 +44,13 @@ export interface StatusMemory {
     files: number
     updated: string
   }>
+  // openclaw fields (used when backend=openclaw)
+  chunk_count: number
+  dirty: boolean
+  sources: string
+  vector_ready: boolean
+  fts_ready: boolean
+  cache_count: number
 }
 
 export interface StatusData {
@@ -86,6 +95,7 @@ interface Logger {
 const OPENCLAW_STATE_DIR = join(homedir(), ".openclaw")
 const SESSIONS_PATH = join(OPENCLAW_STATE_DIR, "agents", "main", "sessions", "sessions.json")
 const CRON_PATH = join(OPENCLAW_STATE_DIR, "cron", "jobs.json")
+const MEMORY_DB_PATH = join(OPENCLAW_STATE_DIR, "memory", "main.sqlite")
 
 export function formatTokens(total: number, context: number): string {
   const fmt = (n: number): string => {
@@ -261,15 +271,24 @@ export function calculateCronHealth(jobs: StatusCronJob[], errors: CronError[]):
   return "healthy"
 }
 
-export function readMemoryStats(): StatusMemory {
-  const defaults: StatusMemory = {
+function emptyMemoryStats(): StatusMemory {
+  return {
+    backend: "openclaw",
     file_count: 0,
     vector_count: 0,
     index_size: "unknown",
     updated: "unknown",
     collections: [],
+    chunk_count: 0,
+    dirty: false,
+    sources: "unknown",
+    vector_ready: false,
+    fts_ready: false,
+    cache_count: 0,
   }
+}
 
+function readQmdStats(): StatusMemory | null {
   try {
     const output = execSync("qmd status", {
       timeout: 5000,
@@ -277,38 +296,86 @@ export function readMemoryStats(): StatusMemory {
       env: { ...process.env, PATH: `${join(homedir(), ".bun/bin")}:${process.env.PATH}` },
     }).trim()
 
-    // Parse "Total:    104 files indexed"
+    const stats = emptyMemoryStats()
+    stats.backend = "qmd"
+
     const filesMatch = output.match(/Total:\s+(\d+)\s+files/)
-    if (filesMatch) defaults.file_count = parseInt(filesMatch[1], 10)
+    if (filesMatch) stats.file_count = parseInt(filesMatch[1], 10)
 
-    // Parse "Vectors:  558 embedded"
     const vectorsMatch = output.match(/Vectors:\s+(\d+)\s+embedded/)
-    if (vectorsMatch) defaults.vector_count = parseInt(vectorsMatch[1], 10)
+    if (vectorsMatch) stats.vector_count = parseInt(vectorsMatch[1], 10)
 
-    // Parse "Size:  6.3 MB"
     const sizeMatch = output.match(/Size:\s+(.+)/)
-    if (sizeMatch) defaults.index_size = sizeMatch[1].trim()
+    if (sizeMatch) stats.index_size = sizeMatch[1].trim()
 
-    // Parse "Updated:  2h ago"
     const updatedMatch = output.match(/Updated:\s+(.+)/)
-    if (updatedMatch) defaults.updated = updatedMatch[1].trim()
+    if (updatedMatch) stats.updated = updatedMatch[1].trim()
 
-    // Parse collections
     const collectionRegex = /^\s{2}(\w+)\s+\(qmd:\/\/\w+\/\)\s*\n\s+Pattern:\s+(.+)\n\s+Files:\s+(\d+)(?:\s+\(updated\s+(.+?)\))?/gm
     let match
     while ((match = collectionRegex.exec(output)) !== null) {
-      defaults.collections.push({
+      stats.collections.push({
         name: match[1],
         pattern: match[2].trim(),
         files: parseInt(match[3], 10),
         updated: match[4]?.trim() ?? "unknown",
       })
     }
+
+    return stats
   } catch {
-    // qmd not available or failed
+    return null
+  }
+}
+
+function readOpenclawStats(): StatusMemory {
+  const stats = emptyMemoryStats()
+  stats.backend = "openclaw"
+
+  if (!existsSync(MEMORY_DB_PATH)) return stats
+
+  try {
+    const result = execSync(
+      `sqlite3 "${MEMORY_DB_PATH}" "SELECT ` +
+      `(SELECT COUNT(*) FROM files) as files, ` +
+      `(SELECT COUNT(*) FROM chunks) as chunks, ` +
+      `(SELECT COUNT(*) FROM embedding_cache) as cache"`,
+      { timeout: 3000, encoding: "utf-8" },
+    ).trim()
+
+    const parts = result.split("|")
+    if (parts.length >= 3) {
+      stats.file_count = parseInt(parts[0], 10) || 0
+      stats.chunk_count = parseInt(parts[1], 10) || 0
+      stats.cache_count = parseInt(parts[2], 10) || 0
+    }
+
+    stats.vector_ready = stats.chunk_count > 0
+    stats.fts_ready = stats.chunk_count > 0
+    stats.sources = "memory, sessions"
+  } catch {
+    // SQLite query failed
   }
 
-  return defaults
+  return stats
+}
+
+/**
+ * Read memory stats from either qmd or OpenClaw's built-in index.
+ *
+ * Backend selection (DASHBOT_MEMORY_BACKEND env var):
+ *   "qmd"      — use qmd (fails silently to openclaw if unavailable)
+ *   "openclaw"  — use OpenClaw's SQLite memory index
+ *   unset       — auto-detect: try qmd first, fall back to openclaw
+ */
+export function readMemoryStats(): StatusMemory {
+  const backend = process.env.DASHBOT_MEMORY_BACKEND?.toLowerCase()
+
+  if (backend === "openclaw") return readOpenclawStats()
+  if (backend === "qmd") return readQmdStats() ?? readOpenclawStats()
+
+  // Auto-detect: prefer qmd, fall back to openclaw
+  return readQmdStats() ?? readOpenclawStats()
 }
 
 export function gatherStatusData(): StatusData {
