@@ -1,6 +1,6 @@
 import type { DashbotConfig, CableMessage } from "./types.js"
 import { DashbotConnection } from "./connection.js"
-import { createOutbound } from "./outbound.js"
+import { createOutbound, type CardPayload } from "./outbound.js"
 import { getDashbotRuntime } from "./runtime.js"
 import { StatusReporter } from "./status-reporter.js"
 
@@ -239,11 +239,12 @@ export const dashbotPlugin = {
       connection.setCardHandler((data: CableMessage) => {
         if (data.type === "card_response" && data.card) {
           const card = data.card
-          const selectedLabel = card.options?.find((o: { value: string }) => o.value === card.response)?.label ?? card.response
+          const selectedOption = card.options?.find((o: { value: string }) => o.value === card.response)
+          const selectedLabel = selectedOption?.label ?? card.response
           log.info?.(`[${account.accountId}] card response: "${card.prompt}" → ${selectedLabel}`)
 
-          // Dispatch as an inbound message so the agent sees it as a system event
-          const content = `[Card Response] "${card.prompt}" → ${selectedLabel} (card_id: ${card.id})`
+          // Forward as a dashbot user message so the agent processes it
+          const content = `[Dashboard Card] ${card.prompt} → **${selectedLabel}** (value: ${card.response}, card_id: ${card.id})`
           dispatchToDashbot({ content, connection, dashbotConfig, cfg, log, accountId: account.accountId })
         }
       })
@@ -304,7 +305,28 @@ function dispatchToDashbot({ content, connection, dashbotConfig, cfg, log, accou
     dispatcherOptions: {
       deliver: async (payload: { text?: string }) => {
         const text = payload.text ?? ""
-        if (text) {
+        if (!text) return
+
+        // Check for embedded card JSON: <!--CARD:{...}-->
+        const cardMatch = text.match(/<!--CARD:([\s\S]*?)-->/)
+        if (cardMatch) {
+          try {
+            const cardData = JSON.parse(cardMatch[1]) as CardPayload
+            // Send the text without the card marker as the message
+            const cleanText = text.replace(/<!--CARD:[\s\S]*?-->/, "").trim()
+            if (cleanText) cardData.message = cleanText
+            log.info?.(`[${accountId}] pushing card: "${cardData.prompt}"`)
+            const result = await outbound.sendCard(cardData)
+            if (!result.ok) {
+              log.error?.(`[${accountId}] card push failed: ${result.error}`)
+              // Fallback: send as regular text
+              outbound.sendText(text.replace(/<!--CARD:[\s\S]*?-->/, "[Card]"))
+            }
+          } catch (err) {
+            log.error?.(`[${accountId}] card parse error: ${String(err)}`)
+            outbound.sendText(text)
+          }
+        } else {
           log.info?.(`[${accountId}] outbound: ${text.slice(0, 80)}`)
           outbound.sendText(text)
         }
