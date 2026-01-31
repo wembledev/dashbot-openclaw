@@ -11,9 +11,27 @@ export interface DashbotMessage {
   created_at: string
 }
 
+export interface CardData {
+  id: number
+  type: string
+  prompt: string
+  options: Array<{ label: string; value: string; style?: string }>
+  status: string
+  response?: string
+  message_id?: number
+  chat_session_id?: number
+  metadata?: Record<string, unknown>
+  responded_at?: string
+  created_at: string
+}
+
 export interface CableMessage {
   type: string
   message?: DashbotMessage
+  card?: CardData
+  card_id?: number
+  message_id?: number
+  response?: string
 }
 
 export interface CableCommand {

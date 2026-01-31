@@ -235,6 +235,19 @@ export const dashbotPlugin = {
         }
       })
 
+      // Handle card response events — forward as system events to the agent
+      connection.setCardHandler((data: CableMessage) => {
+        if (data.type === "card_response" && data.card) {
+          const card = data.card
+          const selectedLabel = card.options?.find((o: { value: string }) => o.value === card.response)?.label ?? card.response
+          log.info?.(`[${account.accountId}] card response: "${card.prompt}" → ${selectedLabel}`)
+
+          // Dispatch as an inbound message so the agent sees it as a system event
+          const content = `[Card Response] "${card.prompt}" → ${selectedLabel} (card_id: ${card.id})`
+          dispatchToDashbot({ content, connection, dashbotConfig, cfg, log, accountId: account.accountId })
+        }
+      })
+
       connection.connect()
 
       // Wait for abort signal to disconnect
