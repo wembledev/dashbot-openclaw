@@ -40,6 +40,7 @@ describe("DashbotConnection", () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.useFakeTimers()
+    createdSockets.length = 0
     receivedMessages = []
     connection = new DashbotConnection(
       { url: "https://dashbot.example.com", token: "test-token" },
@@ -82,7 +83,7 @@ describe("DashbotConnection", () => {
     expect(ws.url).toBe("wss://dashbot.example.com/cable?token=t")
   })
 
-  it("subscribes to ChatChannel after welcome", () => {
+  it("subscribes to ChatChannel and CardsChannel after welcome", () => {
     connection.connect()
     vi.runAllTimers()
     const ws = getLastWebSocket()
@@ -90,10 +91,13 @@ describe("DashbotConnection", () => {
     // Simulate welcome message from server
     simulateMessage(ws, { type: "welcome" })
 
-    expect(ws.sent).toHaveLength(1)
-    const cmd = JSON.parse(ws.sent[0])
-    expect(cmd.command).toBe("subscribe")
-    expect(JSON.parse(cmd.identifier)).toEqual({ channel: "ChatChannel" })
+    expect(ws.sent).toHaveLength(2)
+    const chatCmd = JSON.parse(ws.sent[0])
+    expect(chatCmd.command).toBe("subscribe")
+    expect(JSON.parse(chatCmd.identifier)).toEqual({ channel: "ChatChannel" })
+    const cardsCmd = JSON.parse(ws.sent[1])
+    expect(cardsCmd.command).toBe("subscribe")
+    expect(JSON.parse(cardsCmd.identifier)).toEqual({ channel: "CardsChannel" })
   })
 
   it("dispatches broadcast messages to callback", () => {
@@ -151,9 +155,9 @@ describe("DashbotConnection", () => {
 
     connection.sendResponse("Hello back", { model: "test" })
 
-    // sent[0] is subscribe, sent[1] is the response
-    expect(ws.sent).toHaveLength(2)
-    const cmd = JSON.parse(ws.sent[1])
+    // sent[0] is ChatChannel subscribe, sent[1] is CardsChannel subscribe, sent[2] is the response
+    expect(ws.sent).toHaveLength(3)
+    const cmd = JSON.parse(ws.sent[2])
     expect(cmd.command).toBe("message")
     const data = JSON.parse(cmd.data)
     expect(data.action).toBe("respond")
@@ -171,9 +175,10 @@ describe("DashbotConnection", () => {
 
     connection.sendResponse("should not send")
 
-    // Only the subscribe command should be in sent
-    expect(ws.sent).toHaveLength(1)
+    // Only the two subscribe commands should be in sent (ChatChannel + CardsChannel)
+    expect(ws.sent).toHaveLength(2)
     expect(JSON.parse(ws.sent[0]).command).toBe("subscribe")
+    expect(JSON.parse(ws.sent[1]).command).toBe("subscribe")
   })
 
   it("reconnects after disconnect", () => {

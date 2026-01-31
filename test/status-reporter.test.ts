@@ -2,7 +2,10 @@ import { formatTokens, formatAge, formatRelativeTime, gatherStatusData, StatusRe
 
 // Mock node:child_process
 vi.mock("node:child_process", () => ({
-  execSync: vi.fn(() => "4|12|14"),
+  execSync: vi.fn((cmd: string) => {
+    if (typeof cmd === "string" && cmd.includes("qmd")) throw new Error("qmd not found")
+    return "4|12|14"
+  }),
 }))
 
 // Mock node:fs
