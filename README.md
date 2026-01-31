@@ -1,8 +1,7 @@
 # dashbot-openclaw
 
-[OpenClaw](https://openclaw.ai/) channel plugin for [DashBot](https://github.com/eddanger/dashbot) — connects your OpenClaw agent to the DashBot dashboard over Action Cable (WebSocket).
+[OpenClaw](https://openclaw.ai/) channel plugin for [DashBot](https://github.com/wembledev/dashbot) — connects your OpenClaw agent to the DashBot dashboard over Action Cable (WebSocket).
 
-![DashBot screenshot](https://raw.githubusercontent.com/eddanger/dashbot/main/docs/images/screenshot.png)
 
 ```mermaid
 sequenceDiagram
@@ -24,13 +23,13 @@ sequenceDiagram
 
 ### Prerequisites
 
-- [DashBot](https://github.com/eddanger/dashbot) Rails server running (with `DASHBOT_API_TOKEN` set)
+- [DashBot](https://github.com/wembledev/dashbot) Rails server running (with `DASHBOT_API_TOKEN` set)
 - [OpenClaw](https://openclaw.ai/) gateway installed (`openclaw` CLI available)
 
 ### 1. Clone and install
 
 ```sh
-git clone https://github.com/eddanger/dashbot-openclaw.git
+git clone https://github.com/wembledev/dashbot-openclaw.git
 cd dashbot-openclaw
 npm install
 ```
@@ -251,5 +250,5 @@ openclaw gateway restart
 
 ## Related
 
-- [DashBot](https://github.com/eddanger/dashbot) — the Rails app (dashboard, API, Action Cable server)
+- [DashBot](https://github.com/wembledev/dashbot) — the Rails app (dashboard, API, Action Cable server)
 - [OpenClaw](https://openclaw.ai/) — AI agent gateway

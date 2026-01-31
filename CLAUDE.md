@@ -1,6 +1,6 @@
 # dashbot-openclaw
 
-OpenClaw channel plugin for [DashBot](https://github.com/eddanger/dashbot). TypeScript 5.9, Vitest, ESLint.
+OpenClaw channel plugin for [DashBot](https://github.com/wembledev/dashbot). TypeScript 5.9, Vitest, ESLint.
 
 ## Commands
 
@@ -56,5 +56,5 @@ test/
 
 ## Related
 
-- [DashBot](https://github.com/eddanger/dashbot) — Rails app (dashboard, API, Action Cable server)
+- [DashBot](https://github.com/wembledev/dashbot) — Rails app (dashboard, API, Action Cable server)
 - [OpenClaw](https://openclaw.ai/) — AI agent gateway
