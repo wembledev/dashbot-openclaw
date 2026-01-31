@@ -237,11 +237,15 @@ export const dashbotPlugin = {
 
       connection.connect()
 
+      // Always run HTTP fallback (ensures status data flows even if WebSocket status detection fails)
+      statusReporter.startHttpFallback(dashbotConfig.url, dashbotConfig.token)
+
       // Wait for abort signal to disconnect
       return new Promise<void>((resolve) => {
         abortSignal.addEventListener("abort", () => {
           log.info?.(`[${account.accountId}] disconnecting`)
           statusReporter.stop()
+          statusReporter.stopHttpFallback()
           connection.disconnect()
           resolve()
         })
