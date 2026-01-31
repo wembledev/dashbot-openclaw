@@ -33,12 +33,15 @@ export interface CronError {
 
 export interface StatusMemory {
   file_count: number
-  chunk_count: number
-  dirty: boolean
-  sources: string
-  vector_ready: boolean
-  fts_ready: boolean
-  cache_count: number
+  vector_count: number
+  index_size: string
+  updated: string
+  collections: Array<{
+    name: string
+    pattern: string
+    files: number
+    updated: string
+  }>
 }
 
 export interface StatusData {
@@ -83,7 +86,6 @@ interface Logger {
 const OPENCLAW_STATE_DIR = join(homedir(), ".openclaw")
 const SESSIONS_PATH = join(OPENCLAW_STATE_DIR, "agents", "main", "sessions", "sessions.json")
 const CRON_PATH = join(OPENCLAW_STATE_DIR, "cron", "jobs.json")
-const MEMORY_DB_PATH = join(OPENCLAW_STATE_DIR, "memory", "main.sqlite")
 
 export function formatTokens(total: number, context: number): string {
   const fmt = (n: number): string => {
@@ -262,38 +264,48 @@ export function calculateCronHealth(jobs: StatusCronJob[], errors: CronError[]):
 export function readMemoryStats(): StatusMemory {
   const defaults: StatusMemory = {
     file_count: 0,
-    chunk_count: 0,
-    dirty: false,
-    sources: "unknown",
-    vector_ready: false,
-    fts_ready: false,
-    cache_count: 0,
+    vector_count: 0,
+    index_size: "unknown",
+    updated: "unknown",
+    collections: [],
   }
 
-  if (!existsSync(MEMORY_DB_PATH)) return defaults
-
   try {
-    const result = execSync(
-      `sqlite3 "${MEMORY_DB_PATH}" "SELECT ` +
-      `(SELECT COUNT(*) FROM files) as files, ` +
-      `(SELECT COUNT(*) FROM chunks) as chunks, ` +
-      `(SELECT COUNT(*) FROM embedding_cache) as cache"`,
-      { timeout: 3000, encoding: "utf-8" },
-    ).trim()
+    const output = execSync("qmd status", {
+      timeout: 5000,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: `${join(homedir(), ".bun/bin")}:${process.env.PATH}` },
+    }).trim()
 
-    const parts = result.split("|")
-    if (parts.length >= 3) {
-      defaults.file_count = parseInt(parts[0], 10) || 0
-      defaults.chunk_count = parseInt(parts[1], 10) || 0
-      defaults.cache_count = parseInt(parts[2], 10) || 0
+    // Parse "Total:    104 files indexed"
+    const filesMatch = output.match(/Total:\s+(\d+)\s+files/)
+    if (filesMatch) defaults.file_count = parseInt(filesMatch[1], 10)
+
+    // Parse "Vectors:  558 embedded"
+    const vectorsMatch = output.match(/Vectors:\s+(\d+)\s+embedded/)
+    if (vectorsMatch) defaults.vector_count = parseInt(vectorsMatch[1], 10)
+
+    // Parse "Size:  6.3 MB"
+    const sizeMatch = output.match(/Size:\s+(.+)/)
+    if (sizeMatch) defaults.index_size = sizeMatch[1].trim()
+
+    // Parse "Updated:  2h ago"
+    const updatedMatch = output.match(/Updated:\s+(.+)/)
+    if (updatedMatch) defaults.updated = updatedMatch[1].trim()
+
+    // Parse collections
+    const collectionRegex = /^\s{2}(\w+)\s+\(qmd:\/\/\w+\/\)\s*\n\s+Pattern:\s+(.+)\n\s+Files:\s+(\d+)(?:\s+\(updated\s+(.+?)\))?/gm
+    let match
+    while ((match = collectionRegex.exec(output)) !== null) {
+      defaults.collections.push({
+        name: match[1],
+        pattern: match[2].trim(),
+        files: parseInt(match[3], 10),
+        updated: match[4]?.trim() ?? "unknown",
+      })
     }
-
-    // Check if vector/fts tables have data
-    defaults.vector_ready = defaults.chunk_count > 0
-    defaults.fts_ready = defaults.chunk_count > 0
-    defaults.sources = "memory, sessions"
   } catch {
-    // SQLite query failed, return defaults
+    // qmd not available or failed
   }
 
   return defaults
